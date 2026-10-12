@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock Admin</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,Arial,sans-serif;background:#f3f5f9;margin:0;padding:16px;color:#1b2430}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 12px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tabs button{padding:10px 18px;border:0;border-radius:8px;background:#dfe5f0;font-weight:600;cursor:pointer}
+  .tabs button.on{background:#2563eb;color:#fff}
+  .card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,.08);margin-bottom:14px}
+  .hide{display:none}
+  .btn{padding:10px 16px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}
+  .btn.gray{background:#64748b}.btn:disabled{opacity:.5}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .stat{border-radius:12px;padding:14px;text-align:center}
+  .stat b{display:block;font-size:28px}
+  .s1{background:#e0e7ff}.s2{background:#dcfce7}.s3{background:#fef3c7}.s4{background:#fee2e2}
+  .bar{height:16px;background:#e5e7eb;border-radius:8px;overflow:hidden;margin:16px 0 4px}
+  .bar div{height:100%;background:#22c55e;width:0}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px;border-bottom:1px solid #eceff4;text-align:left}
+  th{background:#f8fafc;position:sticky;top:0}
+  .tw{max-height:420px;overflow:auto}
+  .tag{padding:2px 8px;border-radius:6px;font-weight:700;font-size:12px}
+  .MORE{background:#fef3c7;color:#92400e}.LESS{background:#fee2e2;color:#991b1b}.MATCH{background:#dcfce7;color:#166534}
+  #msg{margin-top:12px;font-size:14px}
+  .err{color:#b91c1c}.ok{color:#166534}
+  h3{margin:18px 0 8px}
+  label.chk{display:flex;gap:8px;align-items:center;margin:12px 0;font-size:14px}
+  .note{font-size:13px;color:#667;margin-top:8px}
+  input[type=search]{padding:8px;border:1px solid #c8cfda;border-radius:8px;width:240px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Medicine Stock – Admin</h1>
+  <div class="tabs">
+    <button id="t1" class="on">Upload Stock</button>
+    <button id="t2">Report</button>
+  </div>
+
+  <div id="p1" class="card">
+    <p>Upload an Excel file with columns: <b>CODE, MEDICINE NAME, FULL, PART</b></p>
+    <input type="file" id="file" accept=".xlsx,.xls,.csv">
+    <label class="chk"><input type="checkbox" id="replace" checked> Replace all existing stock (also clears previous counts)</label>
+    <button class="btn" id="up" disabled>Upload to Supabase</button>
+    <div id="msg"></div>
+    <div class="note">Counting page: open <b>count.html</b> and share it with the people who count.</div>
+  </div>
+
+  <div id="p2" class="hide">
+    <div class="card">
+      <div class="stats">
+        <div class="stat s1"><b id="nTotal">0</b>Total medicines</div>
+        <div class="stat s2"><b id="nDone">0</b>Counted</div>
+        <div class="stat s3"><b id="nPend">0</b>Pending</div>
+        <div class="stat s4"><b id="nMis">0</b>Mismatch</div>
+      </div>
+      <div class="bar"><div id="bar"></div></div>
+      <div id="pct" class="note"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn" id="refresh">Refresh</button>
+        <button class="btn gray" id="csv">Download report (CSV)</button>
+        <input type="search" id="find" placeholder="Search name / code">
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Mismatches</h3>
+      <div class="tw"><table><thead><tr><th>Code</th><th>Medicine</th><th>Stock (Full/Part)</th><th>Counted (Full/Part)</th><th>Type</th><th>Result</th></tr></thead><tbody id="misBody"></tbody></table></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Pending count</h3>
+      <div class="tw"><table><thead><tr><th>Code</th><th>Medicine</th><th>Stock (Full/Part)</th></tr></thead><tbody id="penBody"></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://sfnaiezkemdjjcbxfuzw.supabase.co";
+const SUPABASE_KEY = "sb_publishable_tzf_Bhqi-QFGdVtYfKo9dw_QqwXD5hv";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---- tabs
+function tab(n) {
+  $('p1').classList.toggle('hide', n !== 1); $('p2').classList.toggle('hide', n !== 2);
+  $('t1').classList.toggle('on', n === 1); $('t2').classList.toggle('on', n === 2);
+  if (n === 2) loadReport();
+}
+$('t1').onclick = () => tab(1); $('t2').onclick = () => tab(2);
+
+// ---- upload
+let rows = [];
+const norm = s => String(s).toLowerCase().replace(/[^a-z]/g, '');
+function say(t, cls) { $('msg').className = cls || ''; $('msg').textContent = t; }
+
+$('file').addEventListener('change', async e => {
+  const f = e.target.files[0]; rows = []; $('up').disabled = true;
+  if (!f) return;
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+    const map = {};
+    for (const row of data) {
+      const o = {};
+      for (const k of Object.keys(row)) {
+        const n = norm(k);
+        if (n === 'code') o.code = row[k];
+        else if (n === 'medicinename' || n === 'medicine' || n === 'name') o.name = row[k];
+        else if (n === 'full') o.full = row[k];
+        else if (n === 'part') o.part = row[k];
+      }
+      if (o.code === undefined || o.name === undefined) continue;
+      const code = String(o.code).trim(), name = String(o.name).trim();
+      if (!code || !name) continue;
+      map[code] = { code, medicine_name: name, full_qty: parseInt(o.full) || 0, part_qty: parseInt(o.part) || 0 };
+    }
+    rows = Object.values(map);
+    if (!rows.length) return say('No valid rows found. Check headings: CODE, MEDICINE NAME, FULL, PART.', 'err');
+    say(`${rows.length} medicines ready to upload.`, 'ok');
+    $('up').disabled = false;
+  } catch (err) { say('Could not read file: ' + err.message, 'err'); }
+});
+
+$('up').addEventListener('click', async () => {
+  $('up').disabled = true; say('Uploading...');
+  try {
+    if ($('replace').checked) {
+      let r = await sb.from('stock_count').delete().neq('id', 0); if (r.error) throw r.error;
+      r = await sb.from('stock_master').delete().neq('id', 0); if (r.error) throw r.error;
+    }
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await sb.from('stock_master').upsert(rows.slice(i, i + 500), { onConflict: 'code' });
+      if (error) throw error;
+      say(`Uploaded ${Math.min(i + 500, rows.length)} / ${rows.length}...`);
+    }
+    say(`Done. ${rows.length} medicines saved.`, 'ok');
+  } catch (err) { say('Upload failed: ' + err.message, 'err'); }
+  $('up').disabled = false;
+});
+
+// ---- report
+async function loadAll(table, cols) {
+  let out = [], from = 0;
+  while (true) {
+    const { data, error } = await sb.from(table).select(cols).order('id').range(from, from + 999);
+    if (error) throw error;
+    out = out.concat(data);
+    if (data.length < 1000) break;
+    from += 1000;
+  }
+  return out;
+}
+let mis = [], pen = [];
+async function loadReport() {
+  try {
+    const [master, counts] = await Promise.all([
+      loadAll('stock_master', 'id,code,medicine_name,full_qty,part_qty'),
+      loadAll('stock_count', 'id,code,medicine_name,sys_full,sys_part,counted_full,counted_part,status,count_type')
+    ]);
+    const cmap = {}; counts.forEach(c => cmap[c.code] = c);
+    pen = master.filter(m => !cmap[m.code]);
+    mis = counts.filter(c => c.status !== 'MATCH');
+    const done = counts.filter(c => master.some ? true : true).length;
+    const total = master.length, doneN = total - pen.length;
+    $('nTotal').textContent = total; $('nDone').textContent = doneN;
+    $('nPend').textContent = pen.length; $('nMis').textContent = mis.length;
+    const pct = total ? Math.round(doneN / total * 100) : 0;
+    $('bar').style.width = pct + '%'; $('pct').textContent = pct + '% complete';
+    draw();
+  } catch (e) { alert('Report failed: ' + e.message); }
+}
+function draw() {
+  const q = $('find').value.trim().toLowerCase();
+  const f = (n, c) => !q || n.toLowerCase().includes(q) || c.toLowerCase().includes(q);
+  $('misBody').innerHTML = mis.filter(m => f(m.medicine_name, m.code)).map(m =>
+    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.sys_full} / ${m.sys_part}</td><td>${m.counted_full} / ${m.counted_part}</td><td>${esc(m.count_type || '')}</td><td><span class="tag ${m.status}">${m.status === 'MORE' ? 'GREATER' : 'LESS'}</span></td></tr>`
+  ).join('') || '<tr><td colspan="6">None</td></tr>';
+  $('penBody').innerHTML = pen.filter(m => f(m.medicine_name, m.code)).map(m =>
+    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.full_qty} / ${m.part_qty}</td></tr>`
+  ).join('') || '<tr><td colspan="3">None</td></tr>';
+}
+$('find').addEventListener('input', draw);
+$('refresh').onclick = loadReport;
+$('csv').onclick = () => {
+  const lines = [['Section', 'Code', 'Medicine', 'Stock Full', 'Stock Part', 'Counted Full', 'Counted Part', 'Type', 'Result']];
+  mis.forEach(m => lines.push(['Mismatch', m.code, m.medicine_name, m.sys_full, m.sys_part, m.counted_full, m.counted_part, m.count_type || '', m.status === 'MORE' ? 'GREATER' : 'LESS']));
+  pen.forEach(m => lines.push(['Pending', m.code, m.medicine_name, m.full_qty, m.part_qty, '', '', '', 'PENDING']));
+  const csv = lines.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'stock_report.csv'; a.click();
+};
+</script>
+</body>
+</html>
