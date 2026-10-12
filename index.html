@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
 <title>Stock Count</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -33,6 +34,28 @@
   .seg input{display:none}
   .seg label:has(input:checked){border-color:#2563eb;background:#eaf2ff;color:#1d4ed8}
   .done{margin-top:10px;padding:12px;border-radius:10px;background:#fee2e2;color:#991b1b;font-weight:700;text-align:center;display:none}
+
+  /* ---------- mobile-first overrides ---------- */
+  html{-webkit-text-size-adjust:100%}
+  *{-webkit-tap-highlight-color:transparent}
+  body{padding:10px 10px calc(24px + env(safe-area-inset-bottom));min-height:100vh}
+  .card{padding:16px;border-radius:16px;width:100%}
+  h1{font-size:22px}
+  label{font-size:14px;margin:16px 0 8px}
+  input[type=text],input[type=number],input:not([type]){min-height:54px;font-size:18px;padding:12px 14px;border-radius:12px}
+  input[type=number]{-moz-appearance:textfield;text-align:center;font-size:24px;font-weight:700}
+  input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .seg label{min-height:54px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;margin:0;user-select:none}
+  #sug{max-height:42vh;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;border-radius:12px}
+  #sug div{padding:14px;font-size:16px;line-height:1.3;touch-action:manipulation}
+  #sug div small{display:block;margin-top:2px}
+  .picked{font-size:15px;padding:10px 12px;border-radius:10px;word-break:break-word}
+  .done{font-size:18px;padding:16px;border-radius:12px}
+  button#go{min-height:58px;font-size:19px;border-radius:14px;position:sticky;bottom:calc(10px + env(safe-area-inset-bottom));box-shadow:0 6px 18px rgba(37,99,235,.35);touch-action:manipulation}
+  button#go:active{transform:scale(.98)}
+  #res{font-size:22px;padding:20px 12px;border-radius:14px;line-height:1.3}
+  @media (max-width:380px){ .row{gap:8px} h1{font-size:20px} }
+  @media (min-width:600px){ body{padding:24px} }
 </style>
 </head>
 <body>
@@ -48,15 +71,15 @@
 
   <label>Medicine name</label>
   <div class="wrap">
-    <input id="q" autocomplete="off" placeholder="Start typing..." disabled>
+    <input id="q" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" placeholder="Start typing..." disabled>
     <div id="sug"></div>
   </div>
   <div class="picked" id="picked"></div>
   <div class="done" id="done"></div>
 
   <div class="row">
-    <div><label>FULL</label><input id="full" type="number" min="0" inputmode="numeric" placeholder="0"></div>
-    <div><label>PART</label><input id="part" type="number" min="0" inputmode="numeric" placeholder="0"></div>
+    <div><label>FULL</label><input id="full" type="number" min="0" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" placeholder="0"></div>
+    <div><label>PART</label><input id="part" type="number" min="0" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" placeholder="0"></div>
   </div>
 
   <button id="go" disabled>Submit</button>
@@ -125,6 +148,14 @@ $('q').addEventListener('input', () => {
   }
   renderSug(starts.concat(contains).slice(0, 12));
 });
+
+// keep the search box visible above the on-screen keyboard
+$('q').addEventListener('focus', () => setTimeout(() => $('q').scrollIntoView({ block: 'start', behavior: 'smooth' }), 250));
+// Enter on FULL -> PART, Enter on PART -> submit
+$('full').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('part').focus(); } });
+$('part').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!$('go').disabled) $('go').click(); $('part').blur(); } });
+$('full').addEventListener('focus', e => e.target.select());
+$('part').addEventListener('focus', e => e.target.select());
 
 $('q').addEventListener('keydown', e => {
   const items = $('sug').children;
@@ -205,7 +236,8 @@ $('go').addEventListener('click', async () => {
   picked = null; $('q').value = ''; $('full').value = ''; $('part').value = '';
   $('picked').style.display = 'none'; $('go').disabled = true;
   $('cnt').textContent = `Counted so far: ${countedSet.size} of ${meds.length}`;
-  $('q').focus();
+  if (navigator.vibrate) navigator.vibrate(status === 'MATCH' ? 60 : [80, 60, 80]);
+  r.scrollIntoView({ block: 'center', behavior: 'smooth' });
 });
 
 init();
