@@ -38,6 +38,8 @@
   input[type=date]{min-height:54px;font-size:18px;padding:12px 14px;border-radius:12px;background:#fff}
   .expwarn{display:none;margin-top:8px;padding:10px 12px;border-radius:10px;font-weight:700;text-align:center;background:#ede9fe;color:#5b21b6}
   .expwarn.bad{background:#fee2e2;color:#991b1b}
+  button.addmore{display:none;margin-top:10px;background:#0f766e;min-height:54px;font-size:17px;border-radius:14px}
+  .sofar{display:none;margin-top:8px;font-size:15px;font-weight:600;color:#334;text-align:center}
   /* ---------- mobile-first overrides ---------- */
   html{-webkit-text-size-adjust:100%}
   *{-webkit-tap-highlight-color:transparent}
@@ -79,6 +81,8 @@
   </div>
   <div class="picked" id="picked"></div>
   <div class="done" id="done"></div>
+  <div class="sofar" id="sofar"></div>
+  <button type="button" class="addmore" id="addmore">+ Add more of this medicine</button>
 
   <div class="row">
     <div><label>FULL</label><input id="full" type="number" min="0" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" placeholder="0"></div>
@@ -105,6 +109,12 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = id => document.getElementById(id);
 let meds = [], picked = null, activeIdx = -1, shown = [], countedSet = new Set();
+let existing = { f: 0, p: 0, n: 0 }, addMode = false;
+function resetAdd() {
+  addMode = false; existing = { f: 0, p: 0, n: 0 };
+  $('addmore').style.display = 'none'; $('sofar').style.display = 'none';
+  $('go').textContent = 'Submit';
+}
 
 function todayStr() {
   const d = new Date();
@@ -161,6 +171,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 
 $('q').addEventListener('input', () => {
   picked = null; $('picked').style.display = 'none'; $('go').disabled = true;
+  $('done').style.display = 'none'; resetAdd();
   const t = $('q').value.trim().toLowerCase();
   if (!t) return renderSug([]);
   const words = t.split(/\s+/);
@@ -179,6 +190,14 @@ $('q').addEventListener('focus', () => setTimeout(() => $('q').scrollIntoView({ 
 // Enter on FULL -> PART, Enter on PART -> submit
 $('full').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('part').focus(); } });
 $('part').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!$('go').disabled) $('go').click(); $('part').blur(); } });
+$('addmore').addEventListener('click', () => {
+  if (!picked) return;
+  addMode = true;
+  lockEntry(false);
+  $('done').style.display = 'none'; $('addmore').style.display = 'none'; $('msg').textContent = '';
+  $('go').textContent = 'Add to count'; $('go').disabled = false;
+  $('full').focus();
+});
 $('exp').addEventListener('input', showExpWarn);
 $('exp').addEventListener('change', showExpWarn);
 $('remark').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('remark').blur(); } });
@@ -212,15 +231,20 @@ async function choose(m) {
   $('picked').style.display = 'block';
   $('picked').textContent = 'Selected: ' + m.medicine_name + '  (' + m.code + ')';
   $('res').style.display = 'none'; $('msg').textContent = ''; $('done').style.display = 'none';
-  lockEntry(false); $('go').disabled = true;
+  resetAdd(); lockEntry(false); $('go').disabled = true;
   // check the database for the latest status
-  const { data, error } = await sb.from('stock_count').select('code,count_type').eq('code', m.code).limit(1);
+  const { data, error } = await sb.from('stock_count').select('code,count_type,counted_full,counted_part').eq('code', m.code);
   if (picked !== m) return;
   if (error) { $('msg').textContent = 'Could not check status: ' + error.message; return; }
-  if (data.length || countedSet.has(m.code)) {
+  if (data.length) {
     countedSet.add(m.code);
-    $('done').textContent = '✔ ALREADY COUNTED' + (data[0] && data[0].count_type ? ' (' + data[0].count_type + ')' : '');
+    existing = { f: data.reduce((a, r) => a + r.counted_full, 0), p: data.reduce((a, r) => a + r.counted_part, 0), n: data.length };
+    const types = [...new Set(data.map(r => r.count_type).filter(Boolean))];
+    $('done').textContent = '✔ ALREADY COUNTED' + (types.length ? ' (' + types.join(' + ') + ')' : '');
     $('done').style.display = 'block';
+    $('sofar').textContent = 'Counted so far: ' + existing.f + ' full / ' + existing.p + ' part' + (existing.n > 1 ? ' (' + existing.n + ' entries)' : '');
+    $('sofar').style.display = 'block';
+    $('addmore').style.display = 'block';
     lockEntry(true);
     return;
   }
@@ -241,7 +265,8 @@ $('go').addEventListener('click', async () => {
   if (!ctEl) { $('msg').textContent = 'Select type: IPD or DISPENSARY.'; return; }
   const cf = parseInt($('full').value || '0', 10), cp = parseInt($('part').value || '0', 10);
   if (isNaN(cf) || isNaN(cp) || cf < 0 || cp < 0) { $('msg').textContent = 'Enter valid FULL and PART numbers.'; return; }
-  const status = compare(cf, cp, picked.full_qty, picked.part_qty);
+  const totF = cf + (addMode ? existing.f : 0), totP = cp + (addMode ? existing.p : 0);
+  const status = compare(totF, totP, picked.full_qty, picked.part_qty);
   const expVal = $('exp').value || null;
   const remarkVal = $('remark').value.trim() || null;
   const expired = isExpired(expVal);
@@ -249,14 +274,15 @@ $('go').addEventListener('click', async () => {
   const { error } = await sb.from('stock_count').insert({
     code: picked.code, medicine_name: picked.medicine_name,
     sys_full: picked.full_qty, sys_part: picked.part_qty,
-    counted_full: cf, counted_part: cp, status, count_type: ctEl.value, expiry_date: expVal, remark: remarkVal,
+    counted_full: cf, counted_part: cp, status, count_type: ctEl.value, expiry_date: expVal, remark: remarkVal, is_additional: addMode,
     counted_at: new Date().toISOString()
   });
   if (error) {
-    if (error.code === '23505') {
+    if (error.code === '23505' && addMode) {
+      $('msg').textContent = 'Cannot add more yet: run the latest setup.sql in Supabase first.'; $('go').disabled = false;
+    } else if (error.code === '23505') {
       countedSet.add(picked.code);
-      $('done').textContent = '✔ ALREADY COUNTED'; $('done').style.display = 'block';
-      lockEntry(true);
+      choose(picked);
     } else { $('msg').textContent = 'Save failed: ' + error.message; $('go').disabled = false; }
     return;
   }
@@ -264,6 +290,12 @@ $('go').addEventListener('click', async () => {
   const r = $('res');
   r.className = status; r.style.display = 'block';
   r.textContent = status === 'MATCH' ? '✔ Quantity MATCHES' : status === 'MORE' ? '▲ Counted is GREATER than stock' : '▼ Counted is LESS than stock';
+  if (addMode) {
+    const t = document.createElement('div');
+    t.textContent = 'Total counted now: ' + totF + ' full / ' + totP + ' part';
+    t.style.cssText = 'margin-top:8px;font-size:16px;font-weight:600';
+    r.appendChild(t);
+  }
   if (expired) {
     const x = document.createElement('div');
     x.textContent = '⚠ EXPIRED (' + expVal + ')';
@@ -273,7 +305,7 @@ $('go').addEventListener('click', async () => {
   // reset for next medicine
   picked = null; $('q').value = ''; $('full').value = ''; $('part').value = '';
   $('exp').value = ''; $('remark').value = ''; $('expwarn').style.display = 'none';
-  $('picked').style.display = 'none'; $('go').disabled = true;
+  $('picked').style.display = 'none'; $('go').disabled = true; resetAdd();
   $('cnt').textContent = `Counted so far: ${countedSet.size} of ${meds.length}`;
   if (navigator.vibrate) navigator.vibrate(status === 'MATCH' ? 60 : [80, 60, 80]);
   r.scrollIntoView({ block: 'center', behavior: 'smooth' });
