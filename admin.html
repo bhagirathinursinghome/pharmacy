@@ -172,6 +172,29 @@ function todayStr() {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 const isExp = v => !!v && v < todayStr();
+function cmp(cf, cp, sf, sp) {
+  if (cf === sf && cp === sp) return 'MATCH';
+  if (cf !== sf) return cf > sf ? 'MORE' : 'LESS';
+  return cp > sp ? 'MORE' : 'LESS';
+}
+// combine all entries (first count + additional ones) of the same medicine
+function aggregate(rows) {
+  const g = {};
+  rows.forEach(r => {
+    const a = g[r.code] || (g[r.code] = { code: r.code, medicine_name: r.medicine_name, sys_full: r.sys_full, sys_part: r.sys_part, counted_full: 0, counted_part: 0, entries: 0, types: [], exp_list: [], remarks: [] });
+    a.counted_full += r.counted_full; a.counted_part += r.counted_part; a.entries++;
+    if (r.count_type && !a.types.includes(r.count_type)) a.types.push(r.count_type);
+    if (r.expiry_date && !a.exp_list.includes(r.expiry_date)) a.exp_list.push(r.expiry_date);
+    if (r.remark) a.remarks.push(r.remark);
+  });
+  return Object.values(g).map(a => {
+    a.exp_list.sort();
+    a.count_type = a.types.join(' + '); a.expiry_date = a.exp_list.join(', '); a.remark = a.remarks.join(' | ');
+    a.status = cmp(a.counted_full, a.counted_part, a.sys_full, a.sys_part);
+    return a;
+  });
+}
+const cnt = m => m.counted_full + ' / ' + m.counted_part + (m.entries > 1 ? ' (sum of ' + m.entries + ')' : '');
 async function loadReport() {
   try {
     const [master, counts] = await Promise.all([
@@ -180,8 +203,9 @@ async function loadReport() {
     ]);
     const cmap = {}; counts.forEach(c => cmap[c.code] = c);
     pen = master.filter(m => !cmap[m.code]);
-    mis = counts.filter(c => c.status !== 'MATCH');
-    expd = counts.filter(c => isExp(c.expiry_date));
+    const agg = aggregate(counts);
+    mis = agg.filter(c => c.status !== 'MATCH');
+    expd = agg.filter(c => c.exp_list.some(isExp));
     const done = counts.filter(c => master.some ? true : true).length;
     const total = master.length, doneN = total - pen.length;
     $('nTotal').textContent = total; $('nDone').textContent = doneN;
@@ -195,10 +219,10 @@ function draw() {
   const q = $('find').value.trim().toLowerCase();
   const f = (n, c) => !q || n.toLowerCase().includes(q) || c.toLowerCase().includes(q);
   $('expBody').innerHTML = expd.filter(m => f(m.medicine_name, m.code)).map(m =>
-    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.counted_full} / ${m.counted_part}</td><td>${esc(m.count_type || '')}</td><td><span class="tag EXP">${esc(m.expiry_date)}</span></td><td>${esc(m.remark || '')}</td></tr>`
+    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${cnt(m)}</td><td>${esc(m.count_type || '')}</td><td><span class="tag EXP">${esc(m.exp_list.filter(isExp).join(', '))}</span></td><td>${esc(m.remark || '')}</td></tr>`
   ).join('') || '<tr><td colspan="6">None</td></tr>';
   $('misBody').innerHTML = mis.filter(m => f(m.medicine_name, m.code)).map(m =>
-    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.sys_full} / ${m.sys_part}</td><td>${m.counted_full} / ${m.counted_part}</td><td>${esc(m.count_type || '')}</td><td>${m.expiry_date ? esc(m.expiry_date) + (isExp(m.expiry_date) ? ' <span class="tag EXP">EXPIRED</span>' : '') : ''}</td><td>${esc(m.remark || '')}</td><td><span class="tag ${m.status}">${m.status === 'MORE' ? 'GREATER' : 'LESS'}</span></td></tr>`
+    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.sys_full} / ${m.sys_part}</td><td>${cnt(m)}</td><td>${esc(m.count_type || '')}</td><td>${m.expiry_date ? esc(m.expiry_date) + (m.exp_list.some(isExp) ? ' <span class="tag EXP">EXPIRED</span>' : '') : ''}</td><td>${esc(m.remark || '')}</td><td><span class="tag ${m.status}">${m.status === 'MORE' ? 'GREATER' : 'LESS'}</span></td></tr>`
   ).join('') || '<tr><td colspan="8">None</td></tr>';
   $('penBody').innerHTML = pen.filter(m => f(m.medicine_name, m.code)).map(m =>
     `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.full_qty} / ${m.part_qty}</td></tr>`
