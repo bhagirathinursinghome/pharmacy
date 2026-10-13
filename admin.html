@@ -29,6 +29,8 @@
   th{background:#f8fafc;position:sticky;top:0}
   .tw{max-height:420px;overflow:auto}
   .tag{padding:2px 8px;border-radius:6px;font-weight:700;font-size:12px}
+  .s5{background:#ede9fe}
+  .EXP{background:#ede9fe;color:#5b21b6}
   .MORE{background:#fef3c7;color:#92400e}.LESS{background:#fee2e2;color:#991b1b}.MATCH{background:#dcfce7;color:#166534}
   #msg{margin-top:12px;font-size:14px}
   .err{color:#b91c1c}.ok{color:#166534}
@@ -62,6 +64,7 @@
         <div class="stat s2"><b id="nDone">0</b>Counted</div>
         <div class="stat s3"><b id="nPend">0</b>Pending</div>
         <div class="stat s4"><b id="nMis">0</b>Mismatch</div>
+        <div class="stat s5"><b id="nExp">0</b>Expired</div>
       </div>
       <div class="bar"><div id="bar"></div></div>
       <div id="pct" class="note"></div>
@@ -73,11 +76,15 @@
     </div>
     <div class="card">
       <h3 style="margin-top:0">Mismatches</h3>
-      <div class="tw"><table><thead><tr><th>Code</th><th>Medicine</th><th>Stock (Full/Part)</th><th>Counted (Full/Part)</th><th>Type</th><th>Result</th></tr></thead><tbody id="misBody"></tbody></table></div>
+      <div class="tw"><table><thead><tr><th>Code</th><th>Medicine</th><th>Stock (Full/Part)</th><th>Counted (Full/Part)</th><th>Type</th><th>Expiry</th><th>Remark</th><th>Result</th></tr></thead><tbody id="misBody"></tbody></table></div>
     </div>
     <div class="card">
       <h3 style="margin-top:0">Pending count</h3>
       <div class="tw"><table><thead><tr><th>Code</th><th>Medicine</th><th>Stock (Full/Part)</th></tr></thead><tbody id="penBody"></tbody></table></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Expired stock</h3>
+      <div class="tw"><table><thead><tr><th>Code</th><th>Medicine</th><th>Counted (Full/Part)</th><th>Type</th><th>Expiry</th><th>Remark</th></tr></thead><tbody id="expBody"></tbody></table></div>
     </div>
   </div>
 </div>
@@ -159,20 +166,26 @@ async function loadAll(table, cols) {
   }
   return out;
 }
-let mis = [], pen = [];
+let mis = [], pen = [], expd = [];
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+const isExp = v => !!v && v < todayStr();
 async function loadReport() {
   try {
     const [master, counts] = await Promise.all([
       loadAll('stock_master', 'id,code,medicine_name,full_qty,part_qty'),
-      loadAll('stock_count', 'id,code,medicine_name,sys_full,sys_part,counted_full,counted_part,status,count_type')
+      loadAll('stock_count', 'id,code,medicine_name,sys_full,sys_part,counted_full,counted_part,status,count_type,expiry_date,remark')
     ]);
     const cmap = {}; counts.forEach(c => cmap[c.code] = c);
     pen = master.filter(m => !cmap[m.code]);
     mis = counts.filter(c => c.status !== 'MATCH');
+    expd = counts.filter(c => isExp(c.expiry_date));
     const done = counts.filter(c => master.some ? true : true).length;
     const total = master.length, doneN = total - pen.length;
     $('nTotal').textContent = total; $('nDone').textContent = doneN;
-    $('nPend').textContent = pen.length; $('nMis').textContent = mis.length;
+    $('nPend').textContent = pen.length; $('nMis').textContent = mis.length; $('nExp').textContent = expd.length;
     const pct = total ? Math.round(doneN / total * 100) : 0;
     $('bar').style.width = pct + '%'; $('pct').textContent = pct + '% complete';
     draw();
@@ -181,9 +194,12 @@ async function loadReport() {
 function draw() {
   const q = $('find').value.trim().toLowerCase();
   const f = (n, c) => !q || n.toLowerCase().includes(q) || c.toLowerCase().includes(q);
-  $('misBody').innerHTML = mis.filter(m => f(m.medicine_name, m.code)).map(m =>
-    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.sys_full} / ${m.sys_part}</td><td>${m.counted_full} / ${m.counted_part}</td><td>${esc(m.count_type || '')}</td><td><span class="tag ${m.status}">${m.status === 'MORE' ? 'GREATER' : 'LESS'}</span></td></tr>`
+  $('expBody').innerHTML = expd.filter(m => f(m.medicine_name, m.code)).map(m =>
+    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.counted_full} / ${m.counted_part}</td><td>${esc(m.count_type || '')}</td><td><span class="tag EXP">${esc(m.expiry_date)}</span></td><td>${esc(m.remark || '')}</td></tr>`
   ).join('') || '<tr><td colspan="6">None</td></tr>';
+  $('misBody').innerHTML = mis.filter(m => f(m.medicine_name, m.code)).map(m =>
+    `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.sys_full} / ${m.sys_part}</td><td>${m.counted_full} / ${m.counted_part}</td><td>${esc(m.count_type || '')}</td><td>${m.expiry_date ? esc(m.expiry_date) + (isExp(m.expiry_date) ? ' <span class="tag EXP">EXPIRED</span>' : '') : ''}</td><td>${esc(m.remark || '')}</td><td><span class="tag ${m.status}">${m.status === 'MORE' ? 'GREATER' : 'LESS'}</span></td></tr>`
+  ).join('') || '<tr><td colspan="8">None</td></tr>';
   $('penBody').innerHTML = pen.filter(m => f(m.medicine_name, m.code)).map(m =>
     `<tr><td>${esc(m.code)}</td><td>${esc(m.medicine_name)}</td><td>${m.full_qty} / ${m.part_qty}</td></tr>`
   ).join('') || '<tr><td colspan="3">None</td></tr>';
@@ -191,9 +207,10 @@ function draw() {
 $('find').addEventListener('input', draw);
 $('refresh').onclick = loadReport;
 $('csv').onclick = () => {
-  const lines = [['Section', 'Code', 'Medicine', 'Stock Full', 'Stock Part', 'Counted Full', 'Counted Part', 'Type', 'Result']];
-  mis.forEach(m => lines.push(['Mismatch', m.code, m.medicine_name, m.sys_full, m.sys_part, m.counted_full, m.counted_part, m.count_type || '', m.status === 'MORE' ? 'GREATER' : 'LESS']));
-  pen.forEach(m => lines.push(['Pending', m.code, m.medicine_name, m.full_qty, m.part_qty, '', '', '', 'PENDING']));
+  const lines = [['Section', 'Code', 'Medicine', 'Stock Full', 'Stock Part', 'Counted Full', 'Counted Part', 'Type', 'Expiry', 'Remark', 'Result']];
+  mis.forEach(m => lines.push(['Mismatch', m.code, m.medicine_name, m.sys_full, m.sys_part, m.counted_full, m.counted_part, m.count_type || '', m.expiry_date || '', m.remark || '', m.status === 'MORE' ? 'GREATER' : 'LESS']));
+  pen.forEach(m => lines.push(['Pending', m.code, m.medicine_name, m.full_qty, m.part_qty, '', '', '', '', '', 'PENDING']));
+  expd.forEach(m => lines.push(['Expired', m.code, m.medicine_name, m.sys_full, m.sys_part, m.counted_full, m.counted_part, m.count_type || '', m.expiry_date || '', m.remark || '', 'EXPIRED']));
   const csv = lines.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
