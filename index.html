@@ -35,6 +35,9 @@
   .seg label:has(input:checked){border-color:#2563eb;background:#eaf2ff;color:#1d4ed8}
   .done{margin-top:10px;padding:12px;border-radius:10px;background:#fee2e2;color:#991b1b;font-weight:700;text-align:center;display:none}
 
+  input[type=date]{min-height:54px;font-size:18px;padding:12px 14px;border-radius:12px;background:#fff}
+  .expwarn{display:none;margin-top:8px;padding:10px 12px;border-radius:10px;font-weight:700;text-align:center;background:#ede9fe;color:#5b21b6}
+  .expwarn.bad{background:#fee2e2;color:#991b1b}
   /* ---------- mobile-first overrides ---------- */
   html{-webkit-text-size-adjust:100%}
   *{-webkit-tap-highlight-color:transparent}
@@ -82,6 +85,13 @@
     <div><label>PART</label><input id="part" type="number" min="0" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" placeholder="0"></div>
   </div>
 
+  <label>Expiry date</label>
+  <input id="exp" type="date">
+  <div class="expwarn" id="expwarn"></div>
+
+  <label>Remark <span style="font-weight:400;color:#889">(optional)</span></label>
+  <input id="remark" type="text" maxlength="200" autocomplete="off" enterkeyhint="done" placeholder="e.g. damaged box, near expiry...">
+
   <button id="go" disabled>Submit</button>
   <div id="res"></div>
   <div id="msg"></div>
@@ -95,6 +105,21 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = id => document.getElementById(id);
 let meds = [], picked = null, activeIdx = -1, shown = [], countedSet = new Set();
+
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+const isExpired = v => !!v && v < todayStr();   // expiry date before today = expired
+
+function showExpWarn() {
+  const v = $('exp').value, w = $('expwarn');
+  if (!v) { w.style.display = 'none'; return; }
+  w.style.display = 'block';
+  if (isExpired(v)) { w.className = 'expwarn bad'; w.textContent = '⚠ EXPIRED'; }
+  else if (v === todayStr()) { w.className = 'expwarn'; w.textContent = 'Expires today'; }
+  else { w.style.display = 'none'; }
+}
 
 async function loadAll(table, cols) {
   let out = [], from = 0;
@@ -154,6 +179,9 @@ $('q').addEventListener('focus', () => setTimeout(() => $('q').scrollIntoView({ 
 // Enter on FULL -> PART, Enter on PART -> submit
 $('full').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('part').focus(); } });
 $('part').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!$('go').disabled) $('go').click(); $('part').blur(); } });
+$('exp').addEventListener('input', showExpWarn);
+$('exp').addEventListener('change', showExpWarn);
+$('remark').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('remark').blur(); } });
 $('full').addEventListener('focus', e => e.target.select());
 $('part').addEventListener('focus', e => e.target.select());
 
@@ -173,7 +201,8 @@ document.addEventListener('click', e => { if (!e.target.closest('.wrap')) $('sug
 
 function lockEntry(locked) {
   $('full').disabled = locked; $('part').disabled = locked;
-  if (locked) { $('full').value = ''; $('part').value = ''; $('go').disabled = true; }
+  $('exp').disabled = locked; $('remark').disabled = locked;
+  if (locked) { $('full').value = ''; $('part').value = ''; $('exp').value = ''; $('remark').value = ''; $('expwarn').style.display = 'none'; $('go').disabled = true; }
 }
 
 async function choose(m) {
@@ -213,11 +242,14 @@ $('go').addEventListener('click', async () => {
   const cf = parseInt($('full').value || '0', 10), cp = parseInt($('part').value || '0', 10);
   if (isNaN(cf) || isNaN(cp) || cf < 0 || cp < 0) { $('msg').textContent = 'Enter valid FULL and PART numbers.'; return; }
   const status = compare(cf, cp, picked.full_qty, picked.part_qty);
+  const expVal = $('exp').value || null;
+  const remarkVal = $('remark').value.trim() || null;
+  const expired = isExpired(expVal);
   $('go').disabled = true;
   const { error } = await sb.from('stock_count').insert({
     code: picked.code, medicine_name: picked.medicine_name,
     sys_full: picked.full_qty, sys_part: picked.part_qty,
-    counted_full: cf, counted_part: cp, status, count_type: ctEl.value,
+    counted_full: cf, counted_part: cp, status, count_type: ctEl.value, expiry_date: expVal, remark: remarkVal,
     counted_at: new Date().toISOString()
   });
   if (error) {
@@ -232,8 +264,15 @@ $('go').addEventListener('click', async () => {
   const r = $('res');
   r.className = status; r.style.display = 'block';
   r.textContent = status === 'MATCH' ? '✔ Quantity MATCHES' : status === 'MORE' ? '▲ Counted is GREATER than stock' : '▼ Counted is LESS than stock';
+  if (expired) {
+    const x = document.createElement('div');
+    x.textContent = '⚠ EXPIRED (' + expVal + ')';
+    x.style.cssText = 'margin-top:10px;padding:8px;border-radius:10px;background:#7f1d1d;color:#fff;font-size:18px';
+    r.appendChild(x);
+  }
   // reset for next medicine
   picked = null; $('q').value = ''; $('full').value = ''; $('part').value = '';
+  $('exp').value = ''; $('remark').value = ''; $('expwarn').style.display = 'none';
   $('picked').style.display = 'none'; $('go').disabled = true;
   $('cnt').textContent = `Counted so far: ${countedSet.size} of ${meds.length}`;
   if (navigator.vibrate) navigator.vibrate(status === 'MATCH' ? 60 : [80, 60, 80]);
